@@ -7,8 +7,6 @@
 @rem    PLATFORM
 @rem    PACKAGE_PATH
 
-SETLOCAL ENABLEEXTENSIONS
-
 rem Set required vars defaults
 IF "%PACKAGE_PATH%"=="" SET "PACKAGE_PATH=/tmp/win_package_build"
 IF "%WIN_MSYS2_ROOT%"=="" FOR /F %%F IN ('where msys2') DO SET "WIN_MSYS2_ROOT=%%~dpF"

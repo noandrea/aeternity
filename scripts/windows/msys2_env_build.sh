@@ -1,3 +1,4 @@
+echo Msys Env
 # Msys2 config
 export MSYS=winsymlinks:nativestrict
 
