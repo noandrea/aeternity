@@ -87,6 +87,8 @@
       93,11,3,93,177,65,197,27,123,127,177,165,190,211,20,112,79,108,
       85,78,88,181,26,207,191,211,40,225,138,154>>}).
 
+-define(CACHE_DEFAULT_PASSWORD, "correct horse battery staple").
+
 all() -> [{group, plain}, {group, aevm}, {group, fate}].
 
 groups() ->
@@ -724,7 +726,10 @@ channel_update(#{initiator := IConnPid, responder :=RConnPid},
       updates := Updates} = channel_sign_tx(AcknowledgerPubkey, AcknowledgerPid, AcknowledgerPrivkey, <<"channels.update_ack">>, Config),
 
     {ok, #{<<"state">> := NewState}} = wait_for_channel_event(IConnPid, update, Config),
-    {ok, #{<<"state">> := NewState}} = wait_for_channel_event(RConnPid, update, Config),
+    ct:log("NewState: ~p", [NewState]),
+    Wtf = wait_for_channel_event(RConnPid, update, Config),
+    ct:log("NewState2: ~p", [Wtf]),
+    {ok, #{<<"state">> := NewState}} = Wtf,
     {ok, SignedStateTxBin} = aeser_api_encoder:safe_decode(transaction, NewState),
     SignedStateTx = aetx_sign:deserialize_from_binary(SignedStateTxBin),
 
@@ -1034,18 +1039,19 @@ sc_ws_leave_(Config) ->
     Options = proplists:get_value(channel_options, Config),
     Port = maps:get(port, Options),
     RPort = Port+1,
-    ReestablOptions = #{existing_channel_id => IDi,
+    ReestablishOptions = #{existing_channel_id => IDi,
                         offchain_tx => StI,
                         port => RPort,
-                        protocol => maps:get(protocol, Options)},
-    ReestablOptions.
+                        protocol => maps:get(protocol, Options),
+                        state_password => ?CACHE_DEFAULT_PASSWORD},
+    ReestablishOptions.
 
 
-sc_ws_reestablish_(ReestablOptions, Config) ->
-    {ok, RrConnPid} = channel_ws_start(responder, ReestablOptions, Config),
+sc_ws_reestablish_(ReestablishOptions, Config) ->
+    {ok, RrConnPid} = channel_ws_start(responder, ReestablishOptions, Config),
     {ok, IrConnPid} = channel_ws_start(initiator, maps:put(
                                                     host, <<"localhost">>,
-                                                    ReestablOptions), Config),
+                                                    ReestablishOptions), Config),
     ok = ?WS:register_test_for_channel_events(RrConnPid, [info, update]),
     ok = ?WS:register_test_for_channel_events(IrConnPid, [info, update]),
     {ok, #{<<"event">> := <<"channel_reestablished">>}} =
@@ -2198,11 +2204,14 @@ call_a_contract(Function, Argument, ContractPubKey, Contract, SenderConnPid,
         CallOpts#{call_data => <<"ABCDEFG">>}, Config),
     {ok, #{<<"reason">> := <<"broken_encoding: bytearray">>}} =
         wait_for_channel_event(SenderConnPid, error, Config),
+    ct:log("BROKEN CONTRACT ID"),
     ws_send_tagged(SenderConnPid, <<"channels.update.call_contract">>,
         CallOpts#{contract_id => <<"ABCDEFG">>}, Config),
+    ct:log("WAIT"),
     {ok, #{<<"reason">> := <<"broken_encoding: contracts">>}} =
         wait_for_channel_event(SenderConnPid, error, Config),
     % correct call
+    ct:log("CORRECT"),
     ws_send_tagged(SenderConnPid, <<"channels.update.call_contract">>,
                    CallOpts, Config),
     #{tx := _UnsignedStateTx, updates := _Updates} = UpdateVolley().
@@ -2233,11 +2242,14 @@ dry_call_a_contract(Function, Argument, ContractPubKey, Contract, SenderConnPid,
                    CallOpts#{call_data => <<"ABCDEFG">>}, Config),
     {ok, #{<<"reason">> := <<"broken_encoding: bytearray">>}} =
         wait_for_channel_event(SenderConnPid, error, Config),
+    ct:log("[1] BROKEN contract id"),
     ws_send_tagged(SenderConnPid, <<"channels.dry_run.call_contract">>,
                    CallOpts#{contract_id => <<"ABCDEFG">>}, Config),
     {ok, #{<<"reason">> := <<"broken_encoding: contracts">>}} =
         wait_for_channel_event(SenderConnPid, error, Config),
+    ct:log("[1] CLEAN"),
     {ok, <<"call_contract">>, CallRes} = wait_for_channel_event(SenderConnPid, dry_run, Config),
+    ct:log("WTF: ~p", [CallRes]),
     ok = ?WS:unregister_test_for_channel_event(SenderConnPid, dry_run),
     #{<<"caller_id">>         := _CallerId,
       <<"caller_nonce">>      := CallRound,
@@ -2779,8 +2791,8 @@ sc_ws_cheating_close_solo_(Config, ChId, Poi, WhoCloses) ->
 
 sc_ws_leave_reestablish(Config0) ->
     Config = sc_ws_open_(Config0),
-    ReestablOptions = sc_ws_leave_(Config),
-    Config1 = sc_ws_reestablish_(ReestablOptions, Config),
+    ReestablishOptions = sc_ws_leave_(Config),
+    Config1 = sc_ws_reestablish_(ReestablishOptions, Config),
     ok = sc_ws_update_(Config1),
     ok = sc_ws_close_(Config1).
 
@@ -2830,7 +2842,8 @@ channel_options(IPubkey, RPubkey, IAmt, RAmt, Other, Config) ->
                   initiator_amount => IAmt,
                   responder_amount => RAmt,
                   channel_reserve => 2,
-                  protocol => sc_ws_protocol(Config)
+                  protocol => sc_ws_protocol(Config),
+                  state_password => ?CACHE_DEFAULT_PASSWORD
                 }, Other).
 
 reconnect_channel_options(SignedTx, Config) ->
