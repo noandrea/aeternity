@@ -696,15 +696,15 @@ awaiting_signature(cast, {?SIGNED, ?UPDATE, SignedTx} = Msg,
     lager:debug("?UPDATE signed: ~p", [Updates]),
     maybe_check_sigs(SignedTx, Updates, aesc_offchain_tx, not_offchain_tx, me,
         fun() ->
+            OpData = OpData0#op_data{signed_tx = SignedTx},
             D1 = send_update_msg(
                   SignedTx, Updates,
-                  D#data{state = aesc_offchain_state:set_half_signed_tx(
-                                    SignedTx, D#data.state)}),
-            OpData = OpData0#op_data{signed_tx = SignedTx},
-            next_state(awaiting_update_ack,
-                      log(rcv, ?SIGNED, Msg,
-                          D1#data{op = #op_ack{ tag = ?UPDATE
-                                              , data = OpData}}))
+                  D#data{ state = aesc_offchain_state:set_half_signed_tx(
+                                    SignedTx,
+                                    D#data.state)
+                        , op = #op_ack{ tag = ?UPDATE
+                                      , data = OpData}}),
+            next_state(awaiting_update_ack, log(rcv, ?SIGNED, Msg, D1))
         end, D);
 awaiting_signature(cast, {?SIGNED, ?UPDATE_ACK, SignedTx} = Msg,
                    #data{ op = #op_sign{ tag = ?UPDATE_ACK
@@ -1393,9 +1393,7 @@ new_onchain_tx_for_signing(Type, Opts, D) ->
 new_onchain_tx_for_signing_(Type, Opts, D) ->
     Defaults = tx_defaults(Type, Opts, D),
     Opts1 = maps:merge(Defaults, Opts),
-    CurrHeight = curr_height(),
-    %% TODO PT-165214367: maybe set block_hash
-    BlockHash = ?NOT_SET_BLOCK_HASH,
+    {BlockHash, CurrHeight} = curr_hash_and_height(),
     {ok, Tx, Updates} = new_onchain_tx(Type, Opts1, D, CurrHeight),
     case {aetx:min_fee(Tx, CurrHeight), aetx:fee(Tx)} of
         {MinFee, Fee} when MinFee =< Fee ->
@@ -1720,8 +1718,23 @@ adjust_ttl(undefined) ->
 adjust_ttl(TTL) when is_integer(TTL), TTL >= 0 ->
     TTL.
 
+-spec curr_hash_and_height() -> {aec_blocks:block_header_hash(),
+                                 aec_headers:height()}.
+curr_hash_and_height() ->
+    TopHeader = aec_chain:top_header(),
+    {ok, Hash} = aec_headers:hash_header(TopHeader),
+    Height = aec_headers:height(TopHeader), 
+    {Hash, Height}.
+
+-spec curr_height() -> aec_headers:height().
 curr_height() ->
-    aec_headers:height(aec_chain:top_header()).
+    {_, Height} = curr_hash_and_height(),
+    Height.
+
+-spec curr_hash() -> aec_blocks:block_header_hash().
+curr_hash() ->
+    {Hash, _} = curr_hash_and_height(),
+    Hash.
 
 new_contract_tx_for_signing(Opts, From, #data{ state = State
                                              , opts = ChannelOpts
@@ -1736,10 +1749,18 @@ new_contract_tx_for_signing(Opts, From, #data{ state = State
     Id = aeser_id:create(account, Owner),
     Updates = [aesc_offchain_update:op_new_contract(Id, VmVersion, ABIVersion, Code,
                                                     Deposit, CallData)],
-    {OnChainEnv, OnChainTrees} = aetx_env:tx_env_and_trees_from_top(aetx_contract),
+    {BlockHash, {OnChainEnv, OnChainTrees}} =
+        case maps:get(block_hash, Opts, upspecified) of
+            unspecified ->
+                %% TODO PT-165214367: maybe set older block hash
+                EnvAndTrees = aetx_env:tx_env_and_trees_from_top(aetx_contract),
+                {?NOT_SET_BLOCK_HASH, EnvAndTrees};
+            BH when is_binary(BH) ->
+                EnvAndTrees =
+                    aetx_env:tx_env_and_trees_from_hash(aetx_contract, BH),
+                {BH, EnvAndTrees}
+        end,
     Height = aetx_env:height(OnChainEnv),
-    %% TODO PT-165214367: maybe set block_hash
-    BlockHash = ?NOT_SET_BLOCK_HASH,
     ActiveProtocol = aec_hard_forks:protocol_effective_at_height(Height),
     try
         Tx1 = aesc_offchain_state:make_update_tx(Updates, State, ChannelId,
@@ -1780,12 +1801,14 @@ both_accounts(Data) ->
     [other_account(Data),
      my_account(Data)].
 
-send_funding_created_msg(SignedTx, #data{channel_id = Ch,
-                                         session    = Sn} = Data) ->
+send_funding_created_msg(SignedTx, #data{ channel_id = Ch
+                                        , session    = Sn
+                                        , op = #op_ack{ tag  = create_tx 
+                                                      , data = OpData}} = Data) ->
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ temporary_channel_id => Ch
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash           => ?NOT_SET_BLOCK_HASH
+           , block_hash           => BlockHash
            , data                 => #{tx      => TxBin,
                                        updates => []}},
     aesc_session_noise:funding_created(Sn, Msg),
@@ -1794,14 +1817,15 @@ send_funding_created_msg(SignedTx, #data{channel_id = Ch,
 check_funding_created_msg(#{ temporary_channel_id := ChanId
                            , block_hash           := BlockHash
                            , data                 := #{ tx      := TxBin
-                                                      , updates := UpdatesBin }} = Msg,
-                          #data{ state = State
-                               , opts = Opts
-                               , channel_id = ChanId } = Data) ->
+                                                      , updates := UpdatesBin }} = Msg
+                           , #data{ state = State
+                                  , opts = Opts
+                                  , channel_id = ChanId } = Data) ->
     Updates = [aesc_offchain_update:deserialize(U) || U <- UpdatesBin],
     SignedTx = aetx_sign:deserialize_from_binary(TxBin),
     case verify_signatures_channel_create(SignedTx, initiator) of
         ok ->
+           %% TODO PT-165214367: check block_hash
             case check_update_tx_initial(SignedTx, Updates, State, Opts) of
                 ok ->
                     {ok, SignedTx, Updates,
@@ -1813,12 +1837,14 @@ check_funding_created_msg(#{ temporary_channel_id := ChanId
             Err
     end.
 
-send_funding_signed_msg(SignedTx, #data{channel_id = Ch,
-                                        session    = Sn} = Data) ->
+send_funding_signed_msg(SignedTx, #data{ channel_id = Ch
+                                       , session    = Sn
+                                       , op = #op_ack{ tag = ?FND_CREATED
+                                                     , data = OpData}} = Data) ->
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ temporary_channel_id  => Ch
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash            => ?NOT_SET_BLOCK_HASH
+           , block_hash            => BlockHash
            , data                  => #{tx => TxBin}},
     aesc_session_noise:funding_signed(Sn, Msg),
     log(snd, ?FND_CREATED, Msg, Data).
@@ -1860,12 +1886,15 @@ check_funding_locked_msg(#{ temporary_channel_id := TmpChanId
     end.
 
 send_deposit_created_msg(SignedTx, Updates,
-                         #data{on_chain_id = Ch, session     = Sn} = Data) ->
+                         #data{ on_chain_id = Ch
+                              , session = Sn
+                              , op = #op_ack{ tag  = deposit_tx
+                                            , data = OpData}} = Data) ->
     UBins = [aesc_offchain_update:serialize(U) || U <- Updates],
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ channel_id => Ch
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash => ?NOT_SET_BLOCK_HASH
+           , block_hash => BlockHash
            , data       => #{tx => TxBin,
                              updates => UBins}},
     aesc_session_noise:deposit_created(Sn, Msg),
@@ -1887,12 +1916,14 @@ check_deposit_created_msg(#{ channel_id := ChanId
         {error, _} = Err -> Err
     end.
 
-send_deposit_signed_msg(SignedTx, #data{on_chain_id = Ch,
-                                        session     = Sn} = Data) ->
+send_deposit_signed_msg(SignedTx, #data{ on_chain_id = Ch
+                                       , session     = Sn
+                                       , op = #op_ack{ tag  = ?DEP_CREATED
+                                                     , data = OpData}} = Data) ->
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ channel_id  => Ch
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash  => ?NOT_SET_BLOCK_HASH
+           , block_hash  => BlockHash
            , data        => #{tx => TxBin}},
     aesc_session_noise:deposit_signed(Sn, Msg),
     log(snd, ?DEP_SIGNED, Msg, Data).
@@ -1964,12 +1995,15 @@ check_op_error_msg(_, _, _) ->
     {error, chain_id_mismatch}.
 
 send_withdraw_created_msg(SignedTx, Updates,
-                          #data{on_chain_id = Ch, session = Sn} = Data) ->
+                          #data{ on_chain_id = Ch
+                               , session = Sn
+                               , op = #op_ack{ tag  = withdraw_tx
+                                             , data = OpData}} = Data) ->
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
     UBins = [aesc_offchain_update:serialize(U) || U <- Updates],
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ channel_id => Ch
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash => ?NOT_SET_BLOCK_HASH
+           , block_hash => BlockHash
            , data       => #{tx      => TxBin,
                              updates => UBins}},
     aesc_session_noise:wdraw_created(Sn, Msg),
@@ -1994,11 +2028,14 @@ check_withdraw_created_msg(#{ channel_id := ChanId
 check_withdraw_created_msg(_, _) ->
     {error, channel_id_mismatch}.
 
-send_withdraw_signed_msg(SignedTx, #data{on_chain_id = Ch, session = Sn} = Data) ->
+send_withdraw_signed_msg(SignedTx, #data{ on_chain_id = Ch
+                                        , session = Sn
+                                        , op = #op_ack{ tag  = ?WDRAW_CREATED
+                                                      , data = OpData}} = Data) ->
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ channel_id  => Ch
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash  => ?NOT_SET_BLOCK_HASH
+           , block_hash  => BlockHash
            , data        => #{tx => TxBin}},
     aesc_session_noise:wdraw_signed(Sn, Msg),
     log(snd, ?WDRAW_SIGNED, Msg, Data).
@@ -2043,12 +2080,15 @@ check_withdraw_locked_msg(_, _, _) ->
     {error, channel_id_mismatch}.
 
 send_update_msg(SignedTx, Updates,
-                #data{ on_chain_id = OnChainId, session = Sn} = Data) ->
+                #data{ on_chain_id = OnChainId
+                     , session = Sn
+                     , op = #op_ack{ tag  = ?UPDATE
+                                   , data = OpData}} = Data) ->
     UBins = [aesc_offchain_update:serialize(U) || U <- Updates],
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     Msg = #{ channel_id => OnChainId
-           %% TODO PT-165214367: maybe set block_hash
-           , block_hash => ?NOT_SET_BLOCK_HASH
+           , block_hash => BlockHash
            , data       => #{ tx      => TxBin
                             , updates => UBins }},
     aesc_session_noise:update(Sn, Msg),
@@ -2253,11 +2293,15 @@ send_shutdown_ack_msg(SignedTx, #data{session = Session} = Data) ->
     aesc_session_noise:shutdown_ack(Session, Msg),
     log(snd, ?SHUTDOWN_ACK, Msg, Data).
 
-shutdown_msg(SignedTx, #data{ on_chain_id = OnChainId }) ->
+shutdown_msg(SignedTx, #data{ on_chain_id = OnChainId
+                            , op = #op_sign{ tag  = Shutdown
+                                           , data = OpData}})
+    when Shutdown =:= ?SHUTDOWN;
+         Shutdown =:= ?SHUTDOWN_ACK ->
     TxBin = aetx_sign:serialize_to_binary(SignedTx),
+    #op_data{block_hash = BlockHash} = OpData,
     #{ channel_id => OnChainId
-     %% TODO PT-165214367: maybe set block_hash
-     , block_hash => ?NOT_SET_BLOCK_HASH
+     , block_hash => BlockHash
      , data       => #{tx => TxBin} }.
 
 check_shutdown_msg(#{ channel_id := ChanId
