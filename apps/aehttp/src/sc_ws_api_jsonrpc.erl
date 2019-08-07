@@ -148,24 +148,26 @@ error_id(_) ->
 
 %% JSON-RPC error objects. Try to follow
 %% https://github.com/ethereum/wiki/wiki/JSON-RPC-Error-Codes-Improvement-Proposal
-json_rpc_error_object(parse_error         , R) -> error_obj(-32700        , R);
-json_rpc_error_object(invalid_request     , R) -> error_obj(-32000        , R);
-json_rpc_error_object(unhandled           , R) -> error_obj(-32601        , R);
-json_rpc_error_object(broken_encoding     , R) -> error_obj(3     , [104] , R);
-json_rpc_error_object(broken_code         , R) -> error_obj(3     , [104] , R);
-json_rpc_error_object(value_too_low       , R) -> error_obj(3     , [105] , R);
-json_rpc_error_object(conflict            , R) -> error_obj(3     , [107] , R);
-json_rpc_error_object(insufficient_balance, R) -> error_obj(3     , [1001], R);
-json_rpc_error_object(negative_amount     , R) -> error_obj(3     , [1002], R);
-json_rpc_error_object(invalid_pubkeys     , R) -> error_obj(3     , [1003], R);
-json_rpc_error_object(call_not_found      , R) -> error_obj(3     , [1004], R);
-json_rpc_error_object(contract_init_failed, R) -> error_obj(3     , [1007], R);
-json_rpc_error_object(not_a_number        , R) -> error_obj(3     , [1008], R);
-json_rpc_error_object(participant_not_found, R)-> error_obj(3     , [1011], R);
+json_rpc_error_object(parse_error           , R) -> error_obj(-32700        , R);
+json_rpc_error_object(invalid_request       , R) -> error_obj(-32000        , R);
+json_rpc_error_object(unhandled             , R) -> error_obj(-32601        , R);
+json_rpc_error_object(broken_encoding       , R) -> error_obj(3      , [104] , R);
+json_rpc_error_object(broken_code           , R) -> error_obj(3      , [104] , R);
+json_rpc_error_object(value_too_low         , R) -> error_obj(3      , [105] , R);
+json_rpc_error_object(conflict              , R) -> error_obj(3      , [107] , R);
+json_rpc_error_object(insufficient_balance  , R) -> error_obj(3      , [1001], R);
+json_rpc_error_object(negative_amount       , R) -> error_obj(3      , [1002], R);
+json_rpc_error_object(invalid_pubkeys       , R) -> error_obj(3      , [1003], R);
+json_rpc_error_object(call_not_found        , R) -> error_obj(3      , [1004], R);
+json_rpc_error_object(contract_init_failed  , R) -> error_obj(3      , [1007], R);
+json_rpc_error_object(not_a_number          , R) -> error_obj(3      , [1008], R);
+json_rpc_error_object(participant_not_found , R) -> error_obj(3      , [1011], R);
+json_rpc_error_object(invalid_password      , R) -> error_obj(3      , [1012], R);
+json_rpc_error_object(password_required_since_lima, R) -> error_obj(3, [1012, 1013], R);
 json_rpc_error_object({broken_encoding,What}, R) ->
     error_obj(3, [broken_encoding_code(W) || W <- What], R);
-json_rpc_error_object(not_found           , R) -> error_obj(3     , [100] , R);
-json_rpc_error_object(Other               , R) ->
+json_rpc_error_object(not_found             , R) -> error_obj(3     , [100] , R);
+json_rpc_error_object(Other                 , R) ->
     lager:debug("Unrecognized error reason: ~p", [Other]),
     error_obj(-32603        , R).
 
@@ -233,6 +235,8 @@ error_data_msgs() ->
      , 1009 => <<"Broken encoding: contract bytearray">>
      , 1010 => <<"Broken encoding: transaction">>
      , 1011 => <<"Participant not found">>
+     , 1012 => <<"Invalid password">>
+     , 1013 => <<"Required since lima fork">>
      }.
 
 broken_encoding_code(account    ) -> 1005;

@@ -1727,7 +1727,7 @@ settle_(TTL, MinDepth, #{fsm := FsmI, channel_id := ChannelId} = I, R, Debug,
     ok.
 
 client_reconnect_initiator(Cfg) ->
-    with_trace(fun(Cfg1) -> client_reconnect_(initiator, Cfg1) end, Cfg, "client_reconnect_i").
+    client_reconnect_(initiator, Cfg).
 
 client_reconnect_responder(Cfg) ->
     client_reconnect_(responder, Cfg).
@@ -1747,34 +1747,29 @@ client_reconnect_(Role, Cfg) ->
     unlink(Proxy),
     exit(Proxy, kill),
     timer:sleep(100),  % give the above exit time to propagate
-    ok = things_that_should_fail_if_no_client(Role, I, R, Debug, Cfg),
+    ok = things_that_should_fail_if_no_client(Role, I, R, Debug),
     Res = reconnect(Fsm, Role, RoleI, Debug),
     ct:log("Reconnect req -> ~p", [Res]),
     %% run tests here
     shutdown_(I, R, Cfg).
 
-things_that_should_fail_if_no_client(ClientRole, I, R, Debug, Cfg) ->
-    update_req_conflict(ClientRole, I, R, Debug, Cfg).
+things_that_should_fail_if_no_client(ClientRole, I, R, Debug) ->
+    update_req_conflict(ClientRole, I, R, Debug).
 
-update_req_conflict(Role, I, R, Debug, Cfg) ->
+update_req_conflict(Role, I, R, Debug) ->
     %% Note that the A and B represent I and R, possibly switched, to
     %% indicate who should initiate the update request. Here, A will be
     %% the side that currently has no client.
-    {#{ pub := PubA, fsm := FsmA } = A,
+    {#{ pub := PubA, fsm := FsmA } = _A,
      #{ pub := PubB, fsm := FsmB } = B}
         = roles_for_update(Role, I, R),
     %% cannot request an update from the side with client disconnected
     {error, client_disconnected}
         = rpc(dev1, aesc_fsm, upd_transfer, [FsmA, PubA, PubB, 1]),
     rpc(dev1, aesc_fsm, upd_transfer, [FsmB, PubB, PubA, 2]),
-    {B1, _} = await_signing_request(update, B, Debug, Cfg),
+    {_B1, _} = await_signing_request(update, B, Debug),
     %% FsmR should now detect a conflict
-    {ok, _} = receive_from_fsm(conflict, B1, any_msg(), ?TIMEOUT, Debug),
-    %% Try now with a co-signed update request
-    %% This should work
-    rpc(dev1, aesc_fsm, upd_transfer, [FsmB, PubB, PubA, 3]),
-    {B3, _} = await_signing_request_multisig(update, B, [A], Debug, Cfg),
-    {ok, _} = receive_from_fsm(update, B3, any_msg(), ?TIMEOUT, Debug),
+    {ok, _} = receive_from_fsm(conflict, B, any_msg(), ?TIMEOUT, Debug),
     ok.
 
 roles_for_update(initiator, I, R) -> {I, R};
