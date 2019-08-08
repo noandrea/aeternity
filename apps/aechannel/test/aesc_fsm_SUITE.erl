@@ -989,7 +989,7 @@ leave_reestablish_(Cfg) ->
             ChId = maps:get(channel_id, RLocal),
             mine_key_blocks(dev1, 6), % min depth at 4, so more than 4
             ct:log("reestablishing ...", []),
-            Res = reestablish(ChId, ILocal, RLocal, SignedTx,
+            Res = reestablish(ILocal, RLocal, SignedTx,
                                            Spec0, ?PORT, Debug),
             ct:log("ending attempt ~p", [Idx]),
             Res
