@@ -50,6 +50,7 @@
 -define(DEFAULT_TESTS_COUNT, 5).
 -define(WS, aehttp_ws_test_utils).
 -define(DEFAULT_MIN_DEPTH, 4).
+-define(DEFAULT_MIN_DEPTH_FACTOR, 1).
 -define(MAX_MINED_BLOCKS, 20).
 -define(BOGUS_STATE_HASH, <<42:32/unit:8>>).
 -define(SPEND_FEE, 20000 * aec_test_utils:min_gas_price()).
@@ -3359,7 +3360,7 @@ sc_ws_broken_open_params(Config) ->
             ok = ?WS:register_test_for_channel_events(IConnPid, [closed, error]),
             {ok, #{<<"reason">> := Error}}
                 = wait_for_channel_event(IConnPid, error, Config),
-            try ok = ?WS:wait_for_event(IConnPid, websocket, closed) 
+            try ok = ?WS:wait_for_event(IConnPid, websocket, closed)
             catch error:{connection_died, _Reason} -> ok
             end
         end,
@@ -3367,7 +3368,7 @@ sc_ws_broken_open_params(Config) ->
     %% test initiator pubkey missing
     ChannelOpts1 = channel_options(BogusPubkey, RPubkey, IAmt, RAmt, #{}, Config),
     Test(ChannelOpts1, <<"Participant not found">>),
-    
+
     %% test responder pubkey missing
     ChannelOpts2 = channel_options(IPubkey, BogusPubkey, IAmt, RAmt, #{}, Config),
     Test(ChannelOpts2, <<"Participant not found">>),

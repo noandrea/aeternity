@@ -12,7 +12,7 @@
                   channel_id         :: aesc_channels:id() | undefined,
                   enc_channel_id     :: aeser_api_encoder:encoded() | undefined,
                   job_id             :: term(),
-                  protocol           :: sc_ws_api:protocol(), 
+                  protocol           :: sc_ws_api:protocol(),
                   role               :: initiator | responder | undefined,
                   host               :: binary() | undefined,
                   port               :: non_neg_integer() | undefined}).
@@ -21,7 +21,6 @@
 -export_type([handler/0]).
 
 -define(ERROR_TO_CLIENT(Err), {?MODULE, send_to_client, {error, Err}}).
-
 
 init(Req, _Opts) ->
     lager:debug("init(~p, ~p)", [Req, _Opts]),
@@ -411,30 +410,32 @@ read_channel_options(Params) ->
         case (read_param(<<"existing_channel_id">>, existing_channel_id,
                          #{type => {hash, channel}, mandatory => false}))(Params) of
             not_set ->  %Channel open scenario
-                [Read(<<"role">>, role, #{type => atom, enum => [responder, initiator]}),
-                 Read(<<"push_amount">>, push_amount, #{type => integer}),
-                 %% Read(<<"initiator_id">>, initiator, #{type => {hash, account_pubkey}}),
-                 ReadInitiator,
-                 Read(<<"responder_id">>, responder, #{type => {hash, account_pubkey}}),
-                 Read(<<"lock_period">>, lock_period, #{type => integer}),
-                 Read(<<"channel_reserve">>, channel_reserve, #{type => integer}),
-                 Read(<<"initiator_amount">>, initiator_amount, #{type => integer}),
-                 Read(<<"responder_amount">>, responder_amount, #{type => integer})];
+                [ Read(<<"role">>, role, #{type => atom, enum => [responder, initiator]})
+                , Read(<<"push_amount">>, push_amount, #{type => integer})
+                %%, Read(<<"initiator_id">>, initiator, #{type => {hash, account_pubkey}})
+                , ReadInitiator
+                , Read(<<"responder_id">>, responder, #{type => {hash, account_pubkey}})
+                , Read(<<"lock_period">>, lock_period, #{type => integer})
+                , Read(<<"channel_reserve">>, channel_reserve, #{type => integer})
+                , Read(<<"initiator_amount">>, initiator_amount, #{type => integer})
+                , Read(<<"responder_amount">>, responder_amount, #{type => integer})
+                ];
             {ok, ExistingID} ->  %Channel reestablish (already opened) scenario
                 case aec_chain:get_channel(ExistingID) of
                     {ok, Channel} ->
-                        [Put(existing_channel_id, ExistingID),
-                         Read(<<"offchain_tx">>, offchain_tx, #{type => serialized_tx}),
-                         % push_amount is only used in open and is not preserved.
-                         % 0 guarantees passing checks (executed amount check is the
-                         % same as onchain check)
-                         Put(push_amount, 0),
-                         Put(initiator, aesc_channels:initiator_pubkey(Channel)),
-                         Put(responder, aesc_channels:responder_pubkey(Channel)),
-                         Put(lock_period, aesc_channels:lock_period(Channel)),
-                         Put(channel_reserve, aesc_channels:channel_reserve(Channel)),
-                         Put(initiator_amount, aesc_channels:initiator_amount(Channel)),
-                         Put(responder_amount, aesc_channels:responder_amount(Channel))];
+                        [ Put(existing_channel_id, ExistingID)
+                        , Read(<<"offchain_tx">>, offchain_tx, #{type => serialized_tx})
+                          % push_amount is only used in open and is not preserved.
+                          % 0 guarantees passing checks (executed amount check is the
+                          % same as onchain check)
+                        , Put(push_amount, 0)
+                        , Put(initiator, aesc_channels:initiator_pubkey(Channel))
+                        , Put(responder, aesc_channels:responder_pubkey(Channel))
+                        , Put(lock_period, aesc_channels:lock_period(Channel))
+                        , Put(channel_reserve, aesc_channels:channel_reserve(Channel))
+                        , Put(initiator_amount, aesc_channels:initiator_amount(Channel))
+                        , Put(responder_amount, aesc_channels:responder_amount(Channel))
+                        ];
                     {error, _} = Err ->
                         [Error(Err)]
                 end;
@@ -446,12 +447,13 @@ read_channel_options(Params) ->
             (Fun, Accum) -> Fun(Accum)
         end,
         #{},
-        [Read(<<"minimum_depth">>, minimum_depth, #{type => integer, mandatory => false}),
-         Read(<<"ttl">>, ttl, #{type => integer, mandatory => false}),
-         Put(noise, [{noise, <<"Noise_NN_25519_ChaChaPoly_BLAKE2b">>}])
+        [ Read(<<"minimum_depth">>, minimum_depth, #{type => integer, mandatory => false})
+        , Read(<<"minimum_depth_factor">>, minimum_depth_factor,
+               #{type => integer, mandatory => false})
+        , Read(<<"ttl">>, ttl, #{type => integer, mandatory => false})
+        , Put(noise, [{noise, <<"Noise_NN_25519_ChaChaPoly_BLAKE2b">>}])
         ] ++ OnChainOpts
-          ++ lists:map(ReadTimeout, aesc_fsm:timeouts() ++ [awaiting_open,
-                                                            initialized])
+          ++ lists:map(ReadTimeout, aesc_fsm:timeouts() ++ [awaiting_open, initialized])
           ++ lists:map(ReadReport, aesc_fsm:report_tags())
      ).
 
