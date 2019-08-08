@@ -121,6 +121,10 @@
 -define(LOG_CAUGHT(Err), lager:debug("CAUGHT ~p", [Err])).
 -endif.
 
+-record(bh_delta, { not_older_than = 5  :: integer()
+                  , not_newer_than = 3  :: integer()
+                  }).
+
 %% ==================================================================
 %% Records and Types
 
@@ -139,6 +143,7 @@
               , on_chain_id                   :: undefined | binary()
               , create_tx                     :: undefined | any()
               , watcher                       :: undefined | pid()
+              , block_hash_delta = #bh_delta{}:: #bh_delta{} 
               %% we keep the latest operation so we can perform according
               %% checks
               , op = ?NO_OP                   :: latest_op()
