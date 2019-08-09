@@ -1736,6 +1736,13 @@ curr_hash() ->
     {Hash, _} = curr_hash_and_height(),
     Hash.
 
+pick_hash(#data{block_hash_delta = #bh_delta{not_newer_than = NNT}}) ->
+    TopHeader = aec_chain:top_header(),
+    Height = aec_headers:height(TopHeader), 
+    {ok, Header} = aec_chain:get_key_header_by_height(max(Height - NNT, 0)),
+    {ok, Hash} = aec_headers:hash_header(Header),
+    Hash.
+
 new_contract_tx_for_signing(Opts, From, #data{ state = State
                                              , opts = ChannelOpts
                                              , on_chain_id = ChannelId } = D) ->
