@@ -16,7 +16,8 @@
          name_to_ascii/1,
          to_ascii/1,
          ascii_encode/1,
-         top_name/1]).
+         top_name/1,
+         ensure_name_length/2]).
 
 %%%===================================================================
 %%% API
@@ -111,3 +112,8 @@ top_name(Subname) ->
         Error ->
             Error
     end.
+
+
+ensure_name_length(Name, ErrorTag) ->
+    length(unicode:characters_to_list(Name)) =< ?MAX_NAME_LENGTH
+        orelse error({ErrorTag, Name}).
