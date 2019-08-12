@@ -12,7 +12,7 @@
 to_ascii_test() ->
     ?assertEqual({error, no_registrar},
                  aens_utils:to_ascii(<<"abcdefg">>)),
-    ?assertEqual({error, multiple_namespaces},
+    ?assertEqual({ok,<<"abcd.efgh.test">>},
                  aens_utils:to_ascii(<<"abcd.efgh.test">>)),
     ?assertEqual({error, registrar_unknown},
                  aens_utils:to_ascii(<<"abcd.aettt">>)),
