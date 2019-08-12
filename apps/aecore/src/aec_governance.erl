@@ -18,6 +18,7 @@
          name_protection_period/0,
          name_claim_preclaim_delta/0,
          name_registrars/0,
+         name_max_length/0,
          micro_block_cycle/0,
          accepted_future_block_time_shift/0,
          fraud_report_reward/1,
@@ -240,6 +241,10 @@ name_protection_period() ->
 
 name_claim_preclaim_delta() ->
     1.
+
+name_max_length() ->
+    253.
+
 
 -spec name_registrars() -> list(binary()).
 name_registrars() ->
