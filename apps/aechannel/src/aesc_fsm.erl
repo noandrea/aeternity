@@ -1236,17 +1236,22 @@ check_reestablish_msg(#{ chain_hash := ChainHash
     ChannelRes = get_channel(ChainHash, ChId),
     case ChannelRes of
         {ok, _Channel} ->
-            SignedTx = aetx_sign:deserialize_from_binary(TxBin),
-            Check = aesc_offchain_state:check_reestablish_tx(SignedTx, State),
-            case Check of
-                {ok, NewState} ->
-                    Log1 = log_msg(rcv, ?CH_REESTABL, Msg, Log),
-                    {ok, Data#data{ channel_id  = ChId
-                                  , on_chain_id = ChId
-                                  , state       = NewState
-                                  , log         = Log1 }};
-                {error, _} = TxErr ->
-                    TxErr
+            try SignedTx = aetx_sign:deserialize_from_binary(TxBin),
+                Check = aesc_offchain_state:check_reestablish_tx(SignedTx, State),
+                case Check of
+                    {ok, NewState} ->
+                        Log1 = log_msg(rcv, ?CH_REESTABL, Msg, Log),
+                        {ok, Data#data{ channel_id  = ChId
+                                      , on_chain_id = ChId
+                                      , state       = NewState
+                                      , log         = Log1 }};
+                    {error, _} = TxErr ->
+                        TxErr
+                end
+            catch
+                error:E ->
+                    ?LOG_CAUGHT(E),
+                    {error, invalid_reestablish}
             end;
         {error, _} = ChErr ->
             ChErr
@@ -1743,6 +1748,20 @@ pick_hash(#data{block_hash_delta = #bh_delta{not_newer_than = NNT}}) ->
     {ok, Hash} = aec_headers:hash_header(Header),
     Hash.
 
+-spec pick_pinned_env(#{}, #data{}) ->
+    {aec_blocks:block_header_hash(), aetx_env:env(), aec_trees:trees()}. 
+pick_pinned_env(Opts, D) ->
+    BlockHash =
+        case maps:get(block_hash, Opts, upspecified) of
+            unspecified ->
+                _BH = pick_hash(D);
+            BH when is_binary(BH) ->
+                BH
+        end,
+    {OnChainEnv, OnChainTrees} =
+        aetx_env:tx_env_and_trees_from_hash(aetx_contract, BlockHash),
+    {BlockHash, OnChainEnv, OnChainTrees}.
+
 new_contract_tx_for_signing(Opts, From, #data{ state = State
                                              , opts = ChannelOpts
                                              , on_chain_id = ChannelId } = D) ->
@@ -1756,17 +1775,7 @@ new_contract_tx_for_signing(Opts, From, #data{ state = State
     Id = aeser_id:create(account, Owner),
     Updates = [aesc_offchain_update:op_new_contract(Id, VmVersion, ABIVersion, Code,
                                                     Deposit, CallData)],
-    {BlockHash, {OnChainEnv, OnChainTrees}} =
-        case maps:get(block_hash, Opts, upspecified) of
-            unspecified ->
-                %% TODO PT-165214367: maybe set older block hash
-                EnvAndTrees = aetx_env:tx_env_and_trees_from_top(aetx_contract),
-                {?NOT_SET_BLOCK_HASH, EnvAndTrees};
-            BH when is_binary(BH) ->
-                EnvAndTrees =
-                    aetx_env:tx_env_and_trees_from_hash(aetx_contract, BH),
-                {BH, EnvAndTrees}
-        end,
+    {BlockHash, OnChainEnv, OnChainTrees} = pick_pinned_env(Opts, D),
     Height = aetx_env:height(OnChainEnv),
     ActiveProtocol = aec_hard_forks:protocol_effective_at_height(Height),
     try
@@ -1861,6 +1870,8 @@ send_funding_signed_msg(SignedTx, #data{ channel_id = Ch
     log(snd, ?FND_CREATED, Msg, Data).
 
 check_funding_signed_msg(#{ temporary_channel_id := ChanId
+                          %% since it is co-authenticated already, we don't
+                          %% care much for the block hash being reported
                           , block_hash           := BlockHash
                           , data                 := #{tx := TxBin}} = Msg,
                           #data{ channel_id = ChanId } = Data) ->
@@ -1931,7 +1942,8 @@ check_deposit_created_msg(#{ channel_id := ChanId
                 check_tx_and_verify_signatures(SignedTx, Updates, aesc_deposit_tx,
                                                 Data, [other_account(Data)],
                                                 not_deposit_tx)
-              end
+              end,
+              fun() -> check_block_hash(BlockHash, Data) end
             ],
         case aeu_validation:run(Checks) of
             ok ->
@@ -1957,7 +1969,9 @@ send_deposit_signed_msg(SignedTx, #data{ on_chain_id = Ch
     log(snd, ?DEP_SIGNED, Msg, Data).
 
 check_deposit_signed_msg(#{ channel_id := ChanId
-                          , block_hash := BlockHash
+                          %% since it is co-authenticated already, we don't
+                          %% care much for the block hash being reported
+                          , block_hash := _BlockHash
                           , data       := #{tx := TxBin}} = Msg
                           , #data{ on_chain_id = ChanId
                                  , op = #op_ack{ tag = deposit_tx
@@ -1969,8 +1983,7 @@ check_deposit_signed_msg(#{ channel_id := ChanId
                 check_tx_and_verify_signatures(SignedTx, Updates, aesc_deposit_tx,
                                                 Data, both_accounts(Data),
                                                 not_deposit_tx)
-              end,
-              fun() -> check_block_hash(BlockHash, Data) end
+              end
             ],
         case aeu_validation:run(Checks) of
             ok ->
@@ -2061,7 +2074,8 @@ check_withdraw_created_msg(#{ channel_id := ChanId
                                                pubkeys(other_participant, Data,
                                                        SignedTx),
                                                not_withdraw_tx)
-              end
+              end,
+              fun() -> check_block_hash(BlockHash, Data) end
             ],
         case aeu_validation:run(Checks) of
             ok ->
@@ -2090,7 +2104,9 @@ send_withdraw_signed_msg(SignedTx, #data{ on_chain_id = Ch
     log(snd, ?WDRAW_SIGNED, Msg, Data).
 
 check_withdraw_signed_msg(#{ channel_id := ChanId
-                           , block_hash := BlockHash
+                           %% since it is co-authenticated already, we don't
+                           %% care much for the block hash being reported
+                           , block_hash := _BlockHash
                            , data       := #{tx := TxBin}} = Msg,
                           #data{ on_chain_id = ChanId
                                , op = #op_ack{tag = withdraw_tx} = Op } = Data) ->
@@ -2103,8 +2119,7 @@ check_withdraw_signed_msg(#{ channel_id := ChanId
                                                Data,
                                                pubkeys(both, Data, SignedTx),
                                                not_withdraw_tx)
-              end,
-              fun() -> check_block_hash(BlockHash, Data) end
+              end
             ],
         case aeu_validation:run(Checks) of
             ok ->
@@ -2259,9 +2274,10 @@ check_signed_update_ack_tx(SignedTx, Msg,
                                 , opts = Opts
                                 , op = #op_ack{tag = ?UPDATE} = Op} = D) ->
     #op_ack{ tag = ?UPDATE
-           , data = #op_data{ updates = Updates
-                            , block_hash = BlockHash}} = Op,
+           , data = #op_data{updates = Updates}} = Op,
     HalfSignedTx = aesc_offchain_state:get_latest_half_signed_tx(State),
+    %% since it is co-authenticated already, we don't
+    %% care much for the block hash being reported
     Checks =
         [ fun() -> check_update_ack_(SignedTx, HalfSignedTx) end,
           fun() -> 
@@ -2269,8 +2285,7 @@ check_signed_update_ack_tx(SignedTx, Msg,
                                               D,
                                               pubkeys(both, D, SignedTx),
                                               not_offchain_tx)
-          end,
-          fun() -> check_block_hash(BlockHash, D) end
+          end
         ],
     try aeu_validation:run(Checks) of
         ok ->
@@ -2306,7 +2321,8 @@ handle_upd_transfer(FromPub, ToPub, Amount, From, #data{ state = State
                                                 aeser_id:create(account, ToPub), Amount)],
     {OnChainEnv, OnChainTrees} = aetx_env:tx_env_and_trees_from_top(aetx_contract),
     Height = aetx_env:height(OnChainEnv),
-    %% TODO PT-165214367: maybe set block_hash
+    %% off-chain transfers do not need to be pinned as their execution does not
+    %% depend on a specific environment
     BlockHash = ?NOT_SET_BLOCK_HASH,
     ActiveProtocol = aec_hard_forks:protocol_effective_at_height(Height),
     try
@@ -2383,6 +2399,7 @@ check_shutdown_msg(#{ channel_id := ChanId
                     , data := #{tx := TxBin}} = Msg
                     , #data{on_chain_id = ChanId} = D) ->
     Updates = [],
+    %% TODO:DOMAT
     SignedTx = aetx_sign:deserialize_from_binary(TxBin),
     case check_tx_and_verify_signatures(SignedTx, Updates, aesc_close_mutual_tx,
                                         D,
@@ -3575,8 +3592,7 @@ handle_call_(open, {upd_call_contract, Opts, ExecType}, From,
                                                    ABIVersion, Amount,
                                                    CallData, CallStack),
     Updates = [Update],
-    {OnChainEnv, OnChainTrees} =
-        aetx_env:tx_env_and_trees_from_top(aetx_contract),
+    {BlockHash, OnChainEnv, OnChainTrees} = pick_pinned_env(Opts, D),
     Height = aetx_env:height(OnChainEnv),
     ActiveProtocol = aec_hard_forks:protocol_effective_at_height(Height),
     try  Tx1 = aesc_offchain_state:make_update_tx(Updates, State,
@@ -3596,8 +3612,6 @@ handle_call_(open, {upd_call_contract, Opts, ExecType}, From,
                                                                    UpdState),
                 keep_state(D, [{reply, From, {ok, Call}}]);
             execute ->
-                %% TODO PT-165214367: maybe set block_hash
-                BlockHash = ?NOT_SET_BLOCK_HASH,
                 case request_signing(?UPDATE, Tx1, Updates, BlockHash, D, defer) of
                     {ok, Send, D1, Actions} ->
                         %% reply before sending sig request
