@@ -11,14 +11,12 @@
 
 %% API
 -export([check_name_claimed_and_owned/3,
-         is_name_registrar/1,
          check_split_name/1,
          name_to_ascii/1,
          to_ascii/1,
          ascii_encode/1,
          top_name/1,
-         name_length_valid/1,
-         is_name/1]).
+         name_length_valid/1]).
 
 %%%===================================================================
 %%% API
@@ -66,16 +64,10 @@ check_split_name(Name) ->
     case binary:split(Name, ?LABEL_SEPARATOR, [global, trim]) of
         [_] ->
             {error, no_registrar};
-        [_|_] = NameParts ->
-            RegistrarNS = lists:last(NameParts),
-            case is_name_registrar(RegistrarNS) of
-                true  ->
-                    PartsLen = length(NameParts),
-                    NameKind = if PartsLen == 2 -> name; true -> subname end,
-                    {ok, NameKind, NameParts};
-                false ->
-                    {error, registrar_unknown}
-            end
+        [_, _] = NameParts ->
+            {ok, name, NameParts};
+        [_, _ | _] = NameParts ->
+            {ok, subname, NameParts}
     end.
 
 name_to_ascii(Name) when is_binary(Name) ->
@@ -101,10 +93,6 @@ ascii_encode(Name) ->
             {error, {invalid_codepoint, Cp}}
     end.
 
-
-is_name_registrar(Name) ->
-    lists:member(Name, aec_governance:name_registrars()).
-
 top_name(Subname) ->
     case check_split_name(Subname) of
         {ok, Kind, Parts} ->
@@ -116,9 +104,3 @@ top_name(Subname) ->
 
 name_length_valid(Name) ->
     length(unicode:characters_to_list(Name)) =< aec_governance:name_max_length().
-
-is_name(Name) ->
-    case aens_utils:check_split_name(Name) of
-        {ok, name, _} -> true;
-        _ -> false
-    end.

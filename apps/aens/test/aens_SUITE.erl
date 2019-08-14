@@ -31,7 +31,8 @@
          revoke/1,
          revoke_negative/1,
          prune_preclaim/1,
-         subname/1]).
+         subname/1,
+         subname_negative/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -64,8 +65,9 @@ groups() ->
        transfer_negative,
        revoke,
        revoke_negative,
-       subname
-      ]}
+       subname,
+       subname_negative]
+     }
     ].
 
 -define(NAME, <<"詹姆斯詹姆斯.test"/utf8>>).
@@ -81,7 +83,7 @@ init_per_suite(Cfg) ->
 end_per_suite(_) ->
     [].
 
-init_per_testcase(subname, Cfg) ->
+init_per_testcase(TC, Cfg) when TC == subname; TC == subname_negative ->
     case aect_test_utils:latest_protocol_version() >= ?LIMA_PROTOCOL_VSN of
         true -> Cfg;
         false -> {skip, subname_transaction_is_from_lima_or_never}
@@ -708,3 +710,37 @@ subname(_Cfg) ->
     {[], false} = aens_state_tree:subnames_hashes(NHash, NTrees2, all),
 
     ok.
+
+subname_negative(Cfg) ->
+    Name = fullname(<<"topname">>, Cfg),
+    {PubKey, NHash, S1} = claim([{name, Name} | Cfg]),
+    Trees = aens_test_utils:trees(S1),
+    Height = ?PRE_CLAIM_HEIGHT + 1,
+    Env = aetx_env:tx_env(Height),
+
+    %% Test subname for non existent name
+    TxSpec1 = aens_test_utils:subname_tx_spec(PubKey, fullname(<<"notthere">>, Cfg), #{}, S1),
+    {ok, Tx1} = aens_subname_tx:new(TxSpec1),
+    {error, name_does_not_exist} = aetx:process(Tx1, Trees, Env),
+
+    %% Test subname with invalid definition
+    Def2 = #{1234 => #{}},
+    TxSpec2 = aens_test_utils:subname_tx_spec(PubKey, Name, Def2, S1),
+    {'EXIT', {invalid_subname_definition, [_|_]}} = (catch aens_subname_tx:new(TxSpec2)),
+
+    %% Test subname for revoked name
+    {value, N} = aens_state_tree:lookup_name(NHash, aec_trees:ns(Trees)),
+    S3 = aens_test_utils:revoke_name(N, S1),
+    TxSpec3 = aens_test_utils:subname_tx_spec(PubKey, <<"sub.", Name/binary>>, #{}, S3),
+    {ok, Tx3} = aens_subname_tx:new(TxSpec3),
+    {error, name_does_not_exist} = aetx:process(Tx3, aens_test_utils:trees(S3), Env),
+
+    ok.
+
+%%
+
+fullname(RootName, Cfg) ->
+    {registrar, Reg} = lists:keyfind(registrar, 1, Cfg),
+    <<RootName/binary, ".", Reg/binary>>.
+
+is_post_lima() ->
