@@ -715,6 +715,7 @@ awaiting_signature(cast, {?SIGNED, ?UPDATE_ACK, SignedTx} = Msg,
     maybe_check_sigs(SignedTx, Updates, aesc_offchain_tx, not_offchain_tx, both,
         fun() ->
             D1 = send_update_ack_msg(SignedTx, D),
+            %% TODO PT-165... - use proper env
             {OnChainEnv, OnChainTrees} =
                 aetx_env:tx_env_and_trees_from_top(aetx_contract),
             State = aesc_offchain_state:set_signed_tx(SignedTx, Updates, D1#data.state,
@@ -1398,9 +1399,10 @@ new_onchain_tx_for_signing(Type, Opts, D) ->
 new_onchain_tx_for_signing_(Type, Opts, D) ->
     Defaults = tx_defaults(Type, Opts, D),
     Opts1 = maps:merge(Defaults, Opts),
-    {BlockHash, CurrHeight} = curr_hash_and_height(),
-    {ok, Tx, Updates} = new_onchain_tx(Type, Opts1, D, CurrHeight),
-    case {aetx:min_fee(Tx, CurrHeight), aetx:fee(Tx)} of
+    {BlockHash, OnChainEnv, _OnChainTrees} = pick_pinned_env(Opts, D),
+    PinnedHeight = aetx_env:height(OnChainEnv),
+    {ok, Tx, Updates} = new_onchain_tx(Type, Opts1, D, PinnedHeight),
+    case {aetx:min_fee(Tx, PinnedHeight), aetx:fee(Tx)} of
         {MinFee, Fee} when MinFee =< Fee ->
             {ok, Tx, Updates, BlockHash};
         {MinFee, Fee} ->
@@ -1443,6 +1445,7 @@ new_onchain_tx(channel_deposit_tx, #{acct := FromId,
                                      amount := Amount} = Opts,
                #data{on_chain_id = ChanId, state=State}, CurrHeight) ->
     Updates = [aesc_offchain_update:op_deposit(aeser_id:create(account, FromId), Amount)],
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} =
         aetx_env:tx_env_and_trees_from_top(aetx_contract),
     Height = aetx_env:height(OnChainEnv),
@@ -1468,6 +1471,7 @@ new_onchain_tx(channel_withdraw_tx, #{acct := ToId,
                                       amount := Amount} = Opts,
                #data{on_chain_id = ChanId, state=State}, CurrHeight) ->
     Updates = [aesc_offchain_update:op_withdraw(aeser_id:create(account, ToId), Amount)],
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} =
         aetx_env:tx_env_and_trees_from_top(aetx_contract),
     Height = aetx_env:height(OnChainEnv),
@@ -1724,35 +1728,38 @@ adjust_ttl(TTL) when is_integer(TTL), TTL >= 0 ->
     TTL.
 
 -spec curr_hash_and_height() -> {aec_blocks:block_header_hash(),
-                                 aec_headers:height()}.
+                                 aec_blocks:height()}.
 curr_hash_and_height() ->
     TopHeader = aec_chain:top_header(),
     {ok, Hash} = aec_headers:hash_header(TopHeader),
     Height = aec_headers:height(TopHeader), 
     {Hash, Height}.
 
--spec curr_height() -> aec_headers:height().
+-spec curr_height() -> aec_blocks:height().
 curr_height() ->
     {_, Height} = curr_hash_and_height(),
     Height.
 
--spec curr_hash() -> aec_blocks:block_header_hash().
-curr_hash() ->
-    {Hash, _} = curr_hash_and_height(),
-    Hash.
-
 pick_hash(#data{block_hash_delta = #bh_delta{not_newer_than = NNT}}) ->
     TopHeader = aec_chain:top_header(),
     Height = aec_headers:height(TopHeader), 
+    %% use upper limit
     {ok, Header} = aec_chain:get_key_header_by_height(max(Height - NNT, 0)),
     {ok, Hash} = aec_headers:hash_header(Header),
     Hash.
 
--spec pick_pinned_env(#{}, #data{}) ->
+load_pinned_env(BlockHash, D) ->
+    {BlockHash, _, _} = pick_pinned_env(#{block_hash => BlockHash}, D).
+
+-spec pick_pinned_env(map(), #data{}) ->
     {aec_blocks:block_header_hash(), aetx_env:env(), aec_trees:trees()}. 
+pick_pinned_env(#{block_hash := ?NOT_SET_BLOCK_HASH}, _D) ->
+    {OnChainEnv, OnChainTrees} =
+        aetx_env:tx_env_and_trees_from_top(aetx_contract),
+    {?NOT_SET_BLOCK_HASH, OnChainEnv, OnChainTrees};
 pick_pinned_env(Opts, D) ->
     BlockHash =
-        case maps:get(block_hash, Opts, upspecified) of
+        case maps:get(block_hash, Opts, unspecified) of
             unspecified ->
                 _BH = pick_hash(D);
             BH when is_binary(BH) ->
@@ -2232,6 +2239,7 @@ check_signed_update_tx(Type, SignedTx, Updates, BlockHash,
     end.
 
 check_update_tx_initial(SignedTx, Updates, State, Opts) ->
+    %% this will land on-chain, use latest top
     {OnChainEnv, OnChainTrees} =
         aetx_env:tx_env_and_trees_from_top(aetx_contract),
     aesc_offchain_state:check_initial_update_tx(SignedTx, Updates, State,
@@ -2239,6 +2247,7 @@ check_update_tx_initial(SignedTx, Updates, State, Opts) ->
                                                 Opts).
 
 check_update_tx(SignedTx, Updates, State, Opts, ChannelPubkey) ->
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} =
         aetx_env:tx_env_and_trees_from_top(aetx_contract),
     Height = aetx_env:height(OnChainEnv),
@@ -2274,7 +2283,8 @@ check_signed_update_ack_tx(SignedTx, Msg,
                                 , opts = Opts
                                 , op = #op_ack{tag = ?UPDATE} = Op} = D) ->
     #op_ack{ tag = ?UPDATE
-           , data = #op_data{updates = Updates}} = Op,
+           , data = #op_data{updates    = Updates,
+                             block_hash = BlockHash}} = Op,
     HalfSignedTx = aesc_offchain_state:get_latest_half_signed_tx(State),
     %% since it is co-authenticated already, we don't
     %% care much for the block hash being reported
@@ -2289,8 +2299,8 @@ check_signed_update_ack_tx(SignedTx, Msg,
         ],
     try aeu_validation:run(Checks) of
         ok ->
-            {OnChainEnv, OnChainTrees} =
-                aetx_env:tx_env_and_trees_from_top(aetx_contract),
+            {BlockHash, OnChainEnv, OnChainTrees} = %% use same env
+                load_pinned_env(BlockHash, D),
             {ok, D#data{ state = aesc_offchain_state:set_signed_tx(
                                     SignedTx, Updates, State, OnChainTrees, OnChainEnv, Opts)
                         , log = log_msg(rcv, ?UPDATE_ACK, Msg, D#data.log)}};
@@ -2319,6 +2329,7 @@ handle_upd_transfer(FromPub, ToPub, Amount, From, #data{ state = State
                                                        } = D) ->
     Updates = [aesc_offchain_update:op_transfer(aeser_id:create(account, FromPub),
                                                 aeser_id:create(account, ToPub), Amount)],
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} = aetx_env:tx_env_and_trees_from_top(aetx_contract),
     Height = aetx_env:height(OnChainEnv),
     %% off-chain transfers do not need to be pinned as their execution does not
@@ -2399,27 +2410,40 @@ check_shutdown_msg(#{ channel_id := ChanId
                     , data := #{tx := TxBin}} = Msg
                     , #data{on_chain_id = ChanId} = D) ->
     Updates = [],
-    %% TODO:DOMAT
-    SignedTx = aetx_sign:deserialize_from_binary(TxBin),
-    case check_tx_and_verify_signatures(SignedTx, Updates, aesc_close_mutual_tx,
-                                        D,
-                                        [other_account(D)],
-                                        not_close_mutual_tx) of
-        ok ->
-            {aesc_close_mutual_tx, RealTxI} =
-                aetx:specialize_callback(aetx_sign:innermost_tx(SignedTx)),
-            {ok, FakeCloseTx, [], _BlockHash} = fake_close_mutual_tx(aesc_close_mutual_tx,
-                                                                     RealTxI, D),
-            {channel_close_mutual_tx, FakeTxI} = aetx:specialize_type(FakeCloseTx),
-            case (serialize_close_mutual_tx(FakeTxI) =:=
-                      serialize_close_mutual_tx(RealTxI)) of
-                true ->
-                    {ok, SignedTx, Updates, BlockHash, log(rcv, ?SHUTDOWN, Msg, D)};
-                false ->
-                    {error, shutdown_tx_validation}
-            end;
-        {error, _} = Err ->
-            Err
+    try SignedTx = aetx_sign:deserialize_from_binary(TxBin),
+        {aesc_close_mutual_tx, RealTxI} =
+            aetx:specialize_callback(aetx_sign:innermost_tx(SignedTx)),
+        {ok, FakeCloseTx, [], _BlockHash} = fake_close_mutual_tx(aesc_close_mutual_tx,
+                                                                  RealTxI, D),
+        {channel_close_mutual_tx, FakeTxI} = aetx:specialize_type(FakeCloseTx),
+        Checks =
+            [ fun() -> check_tx_and_verify_signatures(SignedTx, Updates,
+                                                      aesc_close_mutual_tx,
+                                                      D,
+                                                      [other_account(D)],
+                                                      not_close_mutual_tx)
+              end,
+              fun() ->
+                  case (serialize_close_mutual_tx(FakeTxI) =:=
+                            serialize_close_mutual_tx(RealTxI)) of
+                      true ->
+                          ok;
+                      false ->
+                          {error, shutdown_tx_validation}
+                  end
+              end,
+              fun() -> check_block_hash(BlockHash, D) end
+            ],
+        case aeu_validation:run(Checks) of
+            ok ->
+                {ok, SignedTx, Updates, BlockHash, log(rcv, ?SHUTDOWN, Msg, D)};
+            {error, _} = Error ->
+                Error
+        end
+    catch
+        error:E ->
+            ?LOG_CAUGHT(E),
+            {error, invalid_shutdown}
     end.
 
 serialize_close_mutual_tx(Tx) ->
@@ -2427,32 +2451,46 @@ serialize_close_mutual_tx(Tx) ->
     lists:keydelete(nonce, 1, Elems).
 
 check_shutdown_ack_msg(#{ data       := #{tx := TxBin}
+                        %% since it is co-authenticated already, we don't
+                        %% care much for the block hash being reported
                         , block_hash := _BlockHash} = Msg,
                        #data{op = #op_ack{tag = shutdown} = Op} = D) ->
-    %% TODO PT-165214367: check id the same block_hash
     #op_ack{data  = #op_data{signed_tx = MySignedTx}} = Op,
-    SignedTx = aetx_sign:deserialize_from_binary(TxBin),
-    case check_tx_and_verify_signatures(SignedTx, [], aesc_close_mutual_tx,
-                                        D,
-                                        both_accounts(D),
-                                        not_close_mutual_tx) of
-        ok ->
-            check_shutdown_msg_(SignedTx, MySignedTx, Msg, D);
-        {error, _} = Err ->
-            Err
+    try SignedTx = aetx_sign:deserialize_from_binary(TxBin),
+        Checks =
+            [ fun() ->
+                  check_tx_and_verify_signatures(SignedTx, [],
+                                                  aesc_close_mutual_tx,
+                                                  D,
+                                                  both_accounts(D),
+                                                  not_close_mutual_tx)
+              end,
+              fun() ->
+                  check_shutdown_msg_(SignedTx, MySignedTx)
+              end],
+        case aeu_validation:run(Checks) of
+            ok ->
+                {ok, SignedTx, log(rcv, ?SHUTDOWN_ACK, Msg, D)};
+            {error, _} = Error ->
+                Error
+        end
+    catch
+        error:E ->
+            ?LOG_CAUGHT(E),
+            {error, invalid_shutdown}
     end.
 
-check_shutdown_msg_(SignedTx, MySignedTx, Msg, D) ->
+check_shutdown_msg_(SignedTx, MySignedTx) ->
     %% TODO: More thorough checking
     case (aetx:specialize_callback(aetx_sign:innermost_tx(SignedTx))
       =:= aetx:specialize_callback(aetx_sign:innermost_tx(MySignedTx))) of
         true ->
-            {ok, SignedTx, log(rcv, ?SHUTDOWN_ACK, Msg, D)};
+            ok;
         false ->
             {error, shutdown_tx_mismatch}
     end.
 
-send_inband_msg(To, Info, #data{session     = Session} = D) ->
+send_inband_msg(To, Info, #data{session = Session} = D) ->
     ChanId = cur_channel_id(D),
     From = my_account(D),
     M = #{ channel_id => ChanId
@@ -2888,8 +2926,7 @@ verify_signatures_channel_create(SignedTx, Who) ->
 
 verify_signatures_onchain_check(Pubkeys, SignedTx) ->
     {Mod, Tx} = aetx:specialize_callback(aetx_sign:innermost_tx(SignedTx)),
-    {OnChainEnv, OnChainTrees} =
-        aetx_env:tx_env_and_trees_from_top(aetx_contract),
+    {OnChainEnv, OnChainTrees} = authentication_env(),
     {ok, Participants} = Mod:signers(Tx, OnChainTrees),
     SkipKeys = Participants -- Pubkeys,
     case aesc_utils:verify_signatures_onchain(SignedTx, OnChainTrees, OnChainEnv,
@@ -2899,8 +2936,7 @@ verify_signatures_onchain_check(Pubkeys, SignedTx) ->
     end.
 
 verify_signatures_onchain_skip(SkipKeys, SignedTx) ->
-    {OnChainEnv, OnChainTrees} =
-        aetx_env:tx_env_and_trees_from_top(aetx_contract),
+    {OnChainEnv, OnChainTrees} = authentication_env(),
     case aesc_utils:verify_signatures_onchain(SignedTx, OnChainTrees, OnChainEnv,
                                               SkipKeys) of
         ok -> ok;
@@ -2908,8 +2944,7 @@ verify_signatures_onchain_skip(SkipKeys, SignedTx) ->
     end.
 
 verify_signatures_offchain(ChannelPubkey, Pubkeys, SignedTx) ->
-    {OnChainEnv, OnChainTrees} =
-        aetx_env:tx_env_and_trees_from_top(aetx_contract),
+    {OnChainEnv, OnChainTrees} = authentication_env(),
     {ok, Channel} = aec_chain:get_channel(ChannelPubkey),
     InitiatorPubkey = aesc_channels:initiator_pubkey(Channel),
     ResponderPubkey = aesc_channels:responder_pubkey(Channel),
@@ -2921,6 +2956,12 @@ verify_signatures_offchain(ChannelPubkey, Pubkeys, SignedTx) ->
         ok -> ok;
         _ -> {error, bad_signature}
     end.
+
+%% check authentication according latest top - although for fork
+%% safety's sake updates can be pinned to older and safer blocks,
+%% validation of authentication must be performed according the latest top
+authentication_env() ->
+    aetx_env:tx_env_and_trees_from_top(aetx_contract).
 
 check_tx_and_verify_signatures(SignedTx, Updates, Mod, Data, Pubkeys, ErrTypeMsg) ->
     ChannelPubkey = cur_channel_id(Data),
@@ -3106,7 +3147,8 @@ init(#{opts := Opts0} = Arg) ->
               fun(O) -> check_minimum_depth_opt(DefMinDepth, Role, O) end,
               fun check_timeout_opt/1,
               fun check_rpt_opt/1,
-              fun check_log_opt/1
+              fun check_log_opt/1,
+              fun check_block_hash_deltas/1
              ], Opts2),
     #{initiator := Initiator} = Opts,
     Session = start_session(Arg, Reestablish, Opts#{role => Role}),
@@ -3226,6 +3268,16 @@ check_log_opt(#{log_keep := Keep} = Opts) ->
     Opts#{log_keep => ?KEEP};
 check_log_opt(Opts) ->
     Opts#{log_keep => ?KEEP}.
+
+check_block_hash_deltas(#{block_hash_delta := #{ not_older_than := NOT
+                                               , not_newer_than := NNT}} = Opts)
+    when is_integer(NOT), is_integer(NNT), NOT >= 0, NNT >= 0, NOT >= NNT ->
+    Opts;
+check_block_hash_deltas(#{block_hash_delta := InvalidBHDelta} = Opts) ->
+    lager:error("Invalid 'block_hash_delta' option: ~p", [InvalidBHDelta]),
+    maps:depete(block_hash_delta, Opts);
+check_block_hash_deltas(Opts) ->
+    Opts.
 
 check_opts([], Opts) ->
     Opts;
@@ -3375,6 +3427,7 @@ is_channel_locked(LockedUntil) ->
     LockedUntil >= curr_height().
 
 withdraw_locked_complete(SignedTx, Updates, #data{state = State, opts = Opts} = D) ->
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} = aetx_env:tx_env_and_trees_from_top(aetx_contract),
     State1 = aesc_offchain_state:set_signed_tx(SignedTx, Updates, State,
                                                OnChainTrees, OnChainEnv, Opts),
@@ -3382,6 +3435,7 @@ withdraw_locked_complete(SignedTx, Updates, #data{state = State, opts = Opts} = 
     next_state(open, D1).
 
 deposit_locked_complete(SignedTx, Updates, #data{state = State , opts = Opts} = D) ->
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} = aetx_env:tx_env_and_trees_from_top(aetx_contract),
     lager:debug("Applying updates: ~p", [Updates]),
     State1 = aesc_offchain_state:set_signed_tx(SignedTx, Updates, State,
@@ -3439,6 +3493,7 @@ funding_locked_complete(#data{ op = #op_lock{ tag = create
                              , create_tx = CreateTx
                              , state = State
                              , opts = Opts} = D) ->
+    %% TODO PT-165... - use proper env
     {OnChainEnv, OnChainTrees} = aetx_env:tx_env_and_trees_from_top(aetx_contract),
     State1 = aesc_offchain_state:set_signed_tx(CreateTx, Updates, State, OnChainTrees,
                                                OnChainEnv, Opts),
@@ -3963,5 +4018,31 @@ check_block_hash(?NOT_SET_BLOCK_HASH, _) -> ok;
 check_block_hash(BlockHash,
                  #data{block_hash_delta = #bh_delta{ not_older_than = LowerDelta
                                                    , not_newer_than = UpperDelta}}) ->
-    ok.
+    case aec_chain:get_header(BlockHash) of
+        {ok, Header} ->
+            Checks =
+                [ fun() ->
+                      CurrHeight = curr_height(),
+                      BlockHeight = aec_headers:height(Header),
+                      UpperLimit = CurrHeight - UpperDelta,
+                      LowerLimit = CurrHeight - LowerDelta,
+                      case BlockHeight of
+                          _ when BlockHeight > UpperLimit ->
+                              {error, block_hash_too_new};
+                          _ when BlockHeight < LowerLimit ->
+                              {error, block_hash_too_old};
+                          _ -> ok
+                      end
+                  end,
+                  fun() ->
+                      case aec_chain:hash_is_in_main_chain(BlockHash) of
+                          true -> ok;
+                          false -> {error, block_hash_in_fork}
+                      end
+                  end
+                ],
+            aeu_validation:run(Checks);
+        error ->
+            {error, unknown_block_hash}
+    end.
 

@@ -176,7 +176,11 @@ groups() ->
      {both_are_ga, [sequence], ga_sequence()},
      {client_reconnect, [sequence],
       [ client_reconnect_initiator
-      , client_reconnect_responder ]}
+      , client_reconnect_responder ]},
+     {block_hashes, [sequence],
+      [
+        check_mutual_close_with_wrong_amounts
+      ]}
     ].
 
 ga_sequence() ->
