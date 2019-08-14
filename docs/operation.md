@@ -68,7 +68,7 @@ Verify that your node sees the same longest blockchain as the mainnet.
 
 Inspect the current top of the blockchain as seen by the mainnet:
 ```bash
-curl http://13.53.161.215:3013/v2/blocks/top
+curl https://mainnet.aeternity.io/v2/blocks/top
 ```
 
 Inspect the current top of the blockchain as seen by your node:
@@ -83,7 +83,7 @@ Verify that the height is the same; it may take a few minutes for your node to c
 After the node is successfully connected to the mainnet, you could verify that it is mining on the same chain as the rest of the network.
 You can validate it observing the `hash` of the `/blocks/top` of the remote nodes:
 ```bash
-$ curl http://13.53.161.215:3013/v2/blocks/top
+$ curl https://mainnet.aeternity.io/v2/blocks/top
 {"key_block":{"hash":"kh_2UWBL9BciGC1w2FUukJZinchGRrCuwEuFTkcVvpZcfcpjiAbUy","height":...}}
 ```
 
