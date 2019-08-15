@@ -17,7 +17,7 @@
          name_claim_max_expiration/0,
          name_protection_period/0,
          name_claim_preclaim_delta/0,
-         name_registrars/0,
+         name_registrars/1,
          name_max_length/0,
          micro_block_cycle/0,
          accepted_future_block_time_shift/0,
@@ -246,9 +246,12 @@ name_max_length() ->
     253.
 
 
--spec name_registrars() -> list(binary()).
-name_registrars() ->
+-spec name_registrars(aec_hard_forks:protocol_vsn()) -> list(binary()).
+name_registrars(Vsn) when Vsn >= ?LIMA_PROTOCOL_VSN ->
+    [<<"aet">>];
+name_registrars(_Vsn) ->
     [<<"test">>].
+
 
 fraud_report_reward(Height) ->
     Coinbase = block_mine_reward(Height),
