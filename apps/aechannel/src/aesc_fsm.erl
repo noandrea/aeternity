@@ -89,7 +89,6 @@
 %% FSM states (as per gen_statem callback callback_mode/0)
 -export([ initialized/3
         , accepted/3
-        , awaiting_initial_state/3
         , awaiting_leave_ack/3
         , awaiting_locked/3
         , awaiting_open/3
@@ -433,26 +432,6 @@ accepted(cast, {?FND_CREATED, Msg}, #data{role = responder} = D) ->
     end;
 accepted(Type, Msg, D) ->
     handle_common_event(Type, Msg, error_all, D).
-
-awaiting_initial_state(enter, _OldSt, _D) -> keep_state_and_data;
-awaiting_initial_state(cast, {?UPDATE, Msg}, #data{role = responder} = D) ->
-    lager:debug("got {update, ~p}", [Msg]),
-    case check_update_msg(initial, Msg, D) of
-        {ok, SignedTx, Updates, BlockHash, D1} ->
-            lager:debug("update_msg checks out", []),
-            report(info, update, D1),
-            case request_signing_(?UPDATE_ACK, SignedTx, Updates, BlockHash, D1) of
-                {ok, D2, Actions} ->
-                    next_state(awaiting_signature, D2, Actions);
-                {error, _} = Error ->
-                    close(Error, D)
-            end;
-        {error,_} = Error ->
-            %% TODO: do we do a dispute challenge here?
-            close(Error, D)
-    end;
-awaiting_initial_state(Type, Msg, D) ->
-    handle_common_event(Type, Msg, error, D).
 
 awaiting_leave_ack(enter, _OldSt, _D) -> keep_state_and_data;
 awaiting_leave_ack(cast, {?LEAVE_ACK, Msg}, D) ->
@@ -2220,10 +2199,7 @@ check_signed_update_tx(Type, SignedTx, Updates, BlockHash,
              case Type of
                  normal ->
                      check_update_tx(SignedTx, Updates, State, Opts,
-                                     ChannelPubkey);
-                 initial ->
-                     check_update_tx_initial(SignedTx, Updates, State,
-                                             Opts)
+                                     ChannelPubkey)
              end
          end,
          fun() -> check_block_hash(BlockHash, D) end
