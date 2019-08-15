@@ -49,7 +49,8 @@
 %% API
 -export([start_link/0,
          get_fork_result/3,
-         compute_fork_result/3
+         compute_fork_result/3,
+         stop/0
         ]).
 
 %% gen_server callbacks
@@ -97,6 +98,9 @@ compute_fork_result(Block, BlockHash, Fork) ->
             ok
     end.
 
+stop() ->
+    gen_server:stop(?SERVER).
+
 %% gen_server callbacks
 
 init([]) ->
@@ -106,6 +110,8 @@ init([]) ->
 handle_call({get_fork_result, Block, BlockHash, Fork}, _From, State) ->
     {Reply, State1} = handle_get_fork_result(Block, BlockHash, Fork, State),
     {reply, Reply, State1};
+handle_call(results, _From, #state{results = Results} = State) ->
+    {reply, {ok, Results}, State};
 handle_call(_Request, _From, State) ->
     {reply, ingnored, State}.
 
@@ -122,7 +128,7 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Rsn, #state{workers = Workers} = State) ->
-    maps:foldl(fun(W, _BH, S1) -> kill_worker(W, S1) end, State, Workers).
+    maps:fold(fun(W, _BH, S) -> kill_worker(W, S) end, State, Workers).
 
 %% Internal functions
 
@@ -146,7 +152,7 @@ handle_get_fork_result(Block, BlockHash, Fork, #state{results = Results} = State
                     %% The block at height H2 - 1 is supposed to have a pointer
                     %% (in the best case scenario) to the block hash at height
                     %% HE - 1 with the actual result.
-                    {ok, Result} = get_result(Pointer, Results),
+                    Result = get_result(Pointer, Results),
                     {{ok, Result}, State};
                 undefined ->
                     %% If there is no entry, a worker needs to be spawned and
@@ -163,7 +169,7 @@ handle_compute_fork_result(spawn_worker, Block, BlockHash, Fork, State) ->
 handle_compute_fork_result(set_prev_result_or_spawn_worker, Block, BlockHash, Fork, State) ->
     set_prev_result_or_spawn_worker(Block, BlockHash, Fork, State).
 
-handle_worker_msg({Pid, _Ref}, {check_result, BlockHash, LastSigBlockHash},
+handle_worker_msg(Pid, {check_result, BlockHash, LastSigBlockHash},
                   #state{results = Results} = State) ->
     case get_result(LastSigBlockHash, Results) of
         Result when Result =/= undefined ->
@@ -258,7 +264,7 @@ search_last_signalling_block(Block, BlockHash, Fork) ->
 
 compute_signalling_result(Block, BlockHash, Fork) ->
     case compute_signalling_result(Block, BlockHash, Fork, 0) of
-        {ok, Count}         -> signalling_result(Count, Fork);
+        {ok, Count}         -> {ok, signalling_result(Count, Fork)};
         {error, _Rsn} = Err -> Err
     end.
 
