@@ -38,6 +38,7 @@
         , gen_block_chain_with_state/1
         , gen_blocks_only_chain/1
         , gen_blocks_only_chain/2
+        , gen_blocks_only_chain/3
         , gen_block_chain_with_state/2
         , blocks_only_chain/1
         , genesis_block/0
@@ -280,27 +281,51 @@ genesis_block_with_state(PresetAccounts) ->
     aec_block_genesis:genesis_block_with_state(#{preset_accounts => PresetAccounts}).
 
 %% Generic blockchain without transactions
-gen_block_chain_with_state(Length) ->
-    gen_block_chain_with_state(Length, ?GENESIS_ACCOUNTS).
-
 gen_blocks_only_chain(Length) ->
-    blocks_only_chain(gen_block_chain_with_state(Length)).
+    blocks_only_chain(gen_block_chain_with_state(Length, ?GENESIS_ACCOUNTS, #{})).
 
-gen_blocks_only_chain(Length,  PresetAccounts) ->
-    blocks_only_chain(gen_block_chain_with_state(Length, PresetAccounts)).
+gen_blocks_only_chain(Length, PresetAccounts) when is_list(PresetAccounts) ->
+    blocks_only_chain(gen_block_chain_with_state(Length, PresetAccounts, #{}));
+gen_blocks_only_chain(Length, BlockCfgs) when is_map(BlockCfgs) ->
+    blocks_only_chain(gen_block_chain_with_state(Length, ?GENESIS_ACCOUNTS, BlockCfgs)).
 
-gen_block_chain_with_state(Length, PresetAccounts) when Length > 0 ->
+gen_blocks_only_chain(Length, PresetAccounts, BlockCfgs) ->
+    blocks_only_chain(gen_block_chain_with_state(Length, PresetAccounts, BlockCfgs)).
+
+gen_block_chain_with_state(Length) ->
+    gen_block_chain_with_state(Length, ?GENESIS_ACCOUNTS, #{}).
+
+gen_block_chain_with_state(Length, PresetAccounts) ->
+    gen_block_chain_with_state(Length, PresetAccounts, #{}).
+
+gen_block_chain_with_state(Length, PresetAccounts, BlockCfgs) when Length > 0 ->
     {ok, MinerAccount, _} = wait_for_pubkey(),
-    gen_block_chain_with_state(Length, MinerAccount, PresetAccounts, []).
+    gen_block_chain_with_state(Length, MinerAccount, PresetAccounts, BlockCfgs).
 
+gen_block_chain_with_state(Length, MinerAccount, PresetAccounts, BlockCfgs) ->
+    BlockCfgs1 = prepare_block_configs(0, Length, BlockCfgs, []),
+    gen_block_chain_with_state(Length, MinerAccount, PresetAccounts, BlockCfgs1, []).
 
-gen_block_chain_with_state(0,_MinerAccount, _PresetAccounts, Acc) -> lists:reverse(Acc);
-gen_block_chain_with_state(N, MinerAccount, PresetAccounts, []) ->
+gen_block_chain_with_state(N, MinerAccount, PresetAccounts, [undefined | BlockCfgs], []) when N > 0 ->
     {B, S} = aec_block_genesis:genesis_block_with_state(#{preset_accounts => PresetAccounts}),
-    gen_block_chain_with_state(N - 1, MinerAccount, PresetAccounts, [{B, S}]);
-gen_block_chain_with_state(N, MinerAccount, PresetAccounts, Acc) ->
-    {B, S} = create_keyblock_with_state(Acc, MinerAccount),
-    gen_block_chain_with_state(N - 1, MinerAccount, PresetAccounts, [{B, S} | Acc]).
+    gen_block_chain_with_state(N - 1, MinerAccount, PresetAccounts, BlockCfgs, [{B, S}]);
+gen_block_chain_with_state(N, MinerAccount, PresetAccounts, [BlockCfg | BlockCfgs], Acc) when N > 0 ->
+    {B, S} = create_keyblock_with_state(Acc, MinerAccount, MinerAccount, BlockCfg),
+    gen_block_chain_with_state(N - 1, MinerAccount, PresetAccounts, BlockCfgs, [{B, S} | Acc]);
+gen_block_chain_with_state(0, _MinerAccount, _PresetAccounts, _BlockCfgs, Acc) ->
+    lists:reverse(Acc).
+
+prepare_block_configs(0, Length, BlockCfgs, []) ->
+    prepare_block_configs(1, Length, BlockCfgs, [undefined]);
+prepare_block_configs(Height, Length, BlockCfgs, Acc) when Height < Length ->
+    case maps:get(Height, BlockCfgs, undefined) of
+        BlockCfg when BlockCfg =/= undefined ->
+            prepare_block_configs(Height + 1, Length, BlockCfgs, [BlockCfg | Acc]);
+        undefined ->
+            prepare_block_configs(Height + 1, Length, BlockCfgs, [hd(Acc) | Acc])
+    end;
+prepare_block_configs(Height, Length, _BlockCfgs, Acc) when Height =:= Length ->
+    lists:reverse(Acc).
 
 grant_fees(FromHeight, Chain, TreesIn, BeneficiaryAccount) ->
     {Fees, Beneficiary1, Beneficiary2} = fees_at_height(FromHeight, Chain, 0, BeneficiaryAccount),
@@ -370,12 +395,16 @@ fees_at_height(N, [{B, S} | Chain], Acc, Beneficiary) ->
     end.
 
 create_keyblock_with_state(Chain, MinerAccount) ->
-    create_keyblock_with_state(Chain, MinerAccount, MinerAccount).
+    create_keyblock_with_state(Chain, MinerAccount, MinerAccount, #{}).
 
-create_keyblock_with_state([{PrevBlock, TreesIn} | _] = Chain, MinerAccount, BeneficiaryAccount) ->
+create_keyblock_with_state(Chain, MinerAccount, BeneficiaryAccount) ->
+    create_keyblock_with_state(Chain, MinerAccount, BeneficiaryAccount, #{}).
+
+create_keyblock_with_state([{PrevBlock, TreesIn} | _] = Chain, MinerAccount, BeneficiaryAccount, BlockCfg) ->
     {ok, PrevBlockHash} = aec_blocks:hash_internal_representation(PrevBlock),
     Height = aec_blocks:height(PrevBlock) + 1,
-    Version = aec_hard_forks:protocol_effective_at_height(Height),
+    Version = get_config(version, BlockCfg,
+                         fun() -> aec_hard_forks:protocol_effective_at_height(Height) end),
     Trees1 = aec_trees:perform_pre_transformations(TreesIn, Height),
     Delay = aec_governance:beneficiary_reward_delay(),
     PrevKeyHash = case aec_blocks:type(PrevBlock) of
@@ -384,20 +413,24 @@ create_keyblock_with_state([{PrevBlock, TreesIn} | _] = Chain, MinerAccount, Ben
                   end,
     %% Dummy block to calculate the fees.
     Target = pick_prev_target(Chain),
-    Block0 = aec_blocks:new_key(Height, PrevBlockHash, PrevKeyHash, aec_trees:hash(TreesIn),
-                                Target, 0, aeu_time:now_in_msecs(), Version,
-                                MinerAccount, BeneficiaryAccount),
+    Block = aec_blocks:new_key(Height, PrevBlockHash, PrevKeyHash, aec_trees:hash(TreesIn),
+                               Target, 0, aeu_time:now_in_msecs(), Version,
+                               MinerAccount, BeneficiaryAccount),
     Trees2 = case Height > Delay of
                  true ->
-                     grant_fees(Height - Delay - 1, [{Block0, TreesIn}|Chain],
+                     grant_fees(Height - Delay - 1, [{Block, TreesIn}|Chain],
                                 Trees1, BeneficiaryAccount);
                  false ->
                      Trees1
              end,
-    Block = aec_blocks:new_key(Height, PrevBlockHash, PrevKeyHash, aec_trees:hash(Trees2),
-                               Target, 0, aeu_time:now_in_msecs(), Version,
-                               MinerAccount, BeneficiaryAccount),
-    {Block, Trees2}.
+    Block1 = aec_blocks:new_key(Height, PrevBlockHash, PrevKeyHash, aec_trees:hash(Trees2),
+                                Target, 0, aeu_time:now_in_msecs(), Version,
+                                MinerAccount, BeneficiaryAccount),
+    Info = get_config(info, BlockCfg,
+                      fun() -> aec_headers:info(aec_blocks:to_header(Block1)) end),
+    KeyHeader = aec_headers:set_info(aec_blocks:to_header(Block1), Info),
+    Block2 = aec_blocks:new_key_from_header(KeyHeader),
+    {Block2, Trees2}.
 
 pick_prev_target([{Block, _}|Left]) ->
     case aec_blocks:type(Block) of
@@ -577,6 +610,15 @@ copy_fork_dir(SourceRelDir, DestRelDir, Release) ->
         end,
         AllFiles).
 
+get_config(Key, Cfg, DefaultFun) when is_map(Cfg) ->
+    case maps:get(Key, Cfg, undefined) of
+        Result when Result =/= undefined ->
+            Result;
+        undefined ->
+            DefaultFun()
+    end;
+get_config(_Key, undefined, DefaultFun) ->
+    DefaultFun().
 
 
 %%%=============================================================================
