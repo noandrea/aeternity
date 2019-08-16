@@ -246,3 +246,5 @@
 
 -define(DEFAULT_FSM_TX_TTL_DELTA, 100).
 
+-type next_fsm_state() :: {next_state, atom(), #data{}, list()}.
+
