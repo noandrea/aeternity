@@ -44,6 +44,8 @@
         , latest_protocol_version/0
         , latest_sophia_version/0
         , latest_sophia_contract_version/0
+        , is_post_lima/0
+        , fullname/1
         ]).
 
 -export([ abi_version/0
@@ -552,3 +554,13 @@ backend() ->
         ?ABI_AEVM_SOPHIA_1 -> aevm;
         ?ABI_FATE_SOPHIA_1 -> fate
     end.
+
+is_post_lima() ->
+    latest_protocol_version() >= ?LIMA_PROTOCOL_VSN.
+
+fullname(RootName) ->
+    Reg = case is_post_lima() of
+              true -> <<"aet">>;
+              false -> <<"test">>
+          end,
+    <<RootName/binary, ".", Reg/binary>>.
